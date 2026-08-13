@@ -1,0 +1,12 @@
+# Binários e objetos
+/monitor
+traffic_tunnel/traffic_tunnel
+*.o
+*.out
+
+# CSVs gerados em tempo de execução
+*.csv
+
+# Diversos
+*.log
+.DS_Store
