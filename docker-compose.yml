@@ -1,0 +1,114 @@
+# The three-machine lab, as containers.
+#
+# The project was written for three VirtualBox virtual machines on a shared NAT
+# network: a proxy running the tunnel server and the monitor, and two clients
+# routing everything through it. What that setup really provided was a single
+# broadcast domain, because the tunnel wraps each packet in a raw Ethernet
+# frame and sends it to the broadcast address. A Docker bridge network provides
+# exactly the same thing, so the whole lab fits in this file.
+#
+#   docker compose up --build
+#   docker compose logs -f proxy      # the live panel
+#   ls capture/                       # the three CSV files
+#
+# What each container is allowed to do:
+#   NET_ADMIN      create tun0, address it, change routes, set promiscuous mode
+#   NET_RAW        open the AF_PACKET sockets the tunnel and the monitor need
+#   /dev/net/tun   the clone device a TUN interface is created from
+#
+# That is the honest minimum. None of these containers is privileged, and each
+# capability maps to something visible in the code.
+
+name: raw-socket-traffic-monitor
+
+x-lab-node: &lab-node
+  build:
+    context: .
+    target: lab
+  image: raw-socket-traffic-monitor:lab
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  devices:
+    - /dev/net/tun:/dev/net/tun
+
+services:
+  # Somewhere for the clients to reach that is not on their own network. It
+  # sits behind the proxy, so the only route to it is through the tunnel and
+  # the proxy's NAT -- which keeps the lab self-contained: no internet needed,
+  # and the traffic the monitor classifies is real HTTP either way.
+  target:
+    image: nginx:alpine
+    networks:
+      outside:
+        ipv4_address: 10.90.2.10
+
+  # The proxy: tunnel server, router, and the machine the monitor runs on.
+  proxy:
+    <<: *lab-node
+    command: ["proxy"]
+    # Docker mounts /proc/sys read-only in an unprivileged container, so
+    # forwarding has to be turned on from out here rather than by server.sh.
+    sysctls:
+      - net.ipv4.ip_forward=1
+    networks:
+      - lab
+      - outside
+    volumes:
+      - ./capture:/capture
+    depends_on:
+      - target
+    healthcheck:
+      # Ready means the tunnel has created tun0 and server.sh has addressed it.
+      test: ["CMD-SHELL", "ip -4 address show tun0 | grep -q 172.31.66.1"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+
+  # Both clients must have forwarding OFF, and this is not a detail.
+  #
+  # The tunnel addresses its two ends with fixed tags, 192.168.255.1 for the
+  # server and .10 for "a client" -- so with two clients, both answer to .10 and
+  # both accept every frame the proxy sends. That is harmless as long as a
+  # client drops what is not addressed to it. Docker, however, hands containers
+  # a namespace with net.ipv4.ip_forward already set to 1, and a client that
+  # forwards will send the other client's packet straight back down the tunnel.
+  # The proxy routes it out again, the client bounces it again, and the packet
+  # loops until its TTL runs out. The monitor then counts one HTTP request about
+  # a hundred times, which is exactly what happened before this was set.
+  client1:
+    <<: *lab-node
+    command: ["client", "client1.sh"]
+    sysctls:
+      - net.ipv4.ip_forward=0
+    networks:
+      - lab
+    depends_on:
+      proxy:
+        condition: service_healthy
+
+  client2:
+    <<: *lab-node
+    command: ["client", "client2.sh"]
+    sysctls:
+      - net.ipv4.ip_forward=0
+    networks:
+      - lab
+    depends_on:
+      proxy:
+        condition: service_healthy
+
+networks:
+  # The segment the tunnel rides on. This is the VirtualBox NAT network.
+  lab:
+    ipam:
+      config:
+        - subnet: 10.90.1.0/24
+
+  # Reachable only from the proxy, which is what makes the clients go through
+  # the tunnel to get there.
+  outside:
+    ipam:
+      config:
+        - subnet: 10.90.2.0/24

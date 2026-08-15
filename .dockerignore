@@ -1,0 +1,11 @@
+# Keep the build context to the sources. The docs are ~12 MB of screenshots and
+# would be copied into the daemon on every build for nothing.
+.git
+.github
+.vscode
+build/
+capture/
+docs/
+*.csv
+README.md
+LICENSE

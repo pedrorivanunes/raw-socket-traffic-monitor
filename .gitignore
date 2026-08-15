@@ -1,12 +1,12 @@
-# Binários e objetos
-/monitor
-traffic_tunnel/traffic_tunnel
+# Build output
+/build/
 *.o
 *.out
 
-# CSVs gerados em tempo de execução
+# CSV files written at runtime, and the directory the container lab writes into
 *.csv
+/capture/
 
-# Diversos
+# Miscellaneous
 *.log
 .DS_Store

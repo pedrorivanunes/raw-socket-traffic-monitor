@@ -1,0 +1,18 @@
+# Normalise line endings so files written on Windows still work on Linux.
+* text=auto
+
+# These must keep LF whatever the checkout does. A CRLF shebang makes the
+# kernel look for an interpreter called "/bin/sh\r", which it reports as
+# "bad interpreter: No such file or directory" -- and a CRLF Dockerfile
+# confuses the parser the same way.
+*.sh text eol=lf
+Dockerfile text eol=lf
+Makefile text eol=lf
+
+# Sources are read on Linux in the container and in CI.
+*.c text eol=lf
+*.h text eol=lf
+*.yml text eol=lf
+
+# Screenshots must never be touched.
+*.png binary

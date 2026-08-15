@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# a new push to the same branch makes the previous run pointless
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and test (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      # one broken compiler should not hide the state of the other
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      # STRICT=1 turns the warning set into -Werror. Two compilers because they
+      # do not warn about the same things, and this code pokes at raw memory in
+      # ways that make those warnings worth reading.
+      - name: Build the monitor and the tunnel
+        run: make STRICT=1 CC=${{ matrix.cc }} all
+
+      - name: Run the unit tests
+        run: make STRICT=1 CC=${{ matrix.cc }} test
+
+  sanitize:
+    name: sanitizers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The job that matters most for this project. Everything in packet.c
+      # reads offsets out of an attacker-controlled buffer, so AddressSanitizer
+      # is what proves the bounds checks are real, and UBSan is what catches the
+      # misaligned loads that a hand-written parser attracts.
+      #
+      # gcc only: see the note on SANITIZE_CC in the Makefile.
+      - name: Run the tests under AddressSanitizer and UBSan
+        run: make STRICT=1 LEAK_CHECK=1 sanitize
+
+  analyze:
+    name: static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck
+        run: make analyze
+
+  container:
+    name: container build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The project is developed on Windows, where none of this compiles, so
+      # the container is the only local build there is. Building it here is what
+      # stops it from quietly rotting.
+      - name: Build the test image
+        run: docker build --target tests -t monitor-tests .
+
+      - name: Run the suite inside the container
+        run: docker run --rm monitor-tests
+
+  lab:
+    name: three-node lab
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tunnel creates a TUN interface, so the module has to be loaded on
+      # the runner before a container can open /dev/net/tun.
+      - name: Make sure the TUN device exists
+        run: |
+          sudo modprobe tun || true
+          ls -l /dev/net/tun
+
+      # Brings up the proxy and both clients, waits for a client to fetch a
+      # page through the tunnel, and checks the capture files describe it.
+      - name: Run the end-to-end lab test
+        run: ./docker/integration-test.sh
+
+      - name: Upload the capture files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture
+          path: capture/
+          if-no-files-found: warn
