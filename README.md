@@ -41,11 +41,11 @@ packet crossing the tunnel.
 ![The three VMs running: clients generating traffic and the proxy classifying on tun0](docs/full-system.png)
 
 > **A note on the screenshots.** These are from the original run on VirtualBox,
-> so the monitor's output in them is in Portuguese and the file names are the old
-> ones. The code has since been translated and reorganised; the panel and the
-> CSV columns now read in English. The screenshots are kept because they are a
-> genuine record of the lab on real machines, which is not something the
-> container version replaces.
+> so the monitor's output in them is in Portuguese and the file names are the
+> old ones. They are kept because they are a genuine record of the lab running
+> on three real machines, which the container version does not replace. For what
+> the program prints *today*, see [Output](#output) — that text is copied
+> straight out of a `docker compose up` run.
 
 ## The lab
 
@@ -196,19 +196,65 @@ conversation.
 
 While the clients use the network, the monitor keeps a panel with the per-layer
 counters and the per-client tree — every remote host contacted, and every
-`local_port → remote_port` flow with its packets, bytes and connection count:
+`local_port → remote_port` flow with its packets, bytes and connection count.
+This is a real panel from `docker compose up`, trimmed:
 
-![The monitor panel: per-layer counters and the client → remote → flow tree](docs/monitor-panel.png)
+```
+=== Network traffic monitor (raw sockets) ===
+Network layer:
+  IPv4 (non-ICMP) : 504
+  IPv6            : 14
+  ICMP            : 0
+  other           : 0
+
+Transport layer:
+  TCP             : 504
+  UDP             : 0
+  other           : 0
+
+Application layer:
+  HTTP            : 504
+  HTTPS           : 0
+  DNS             : 0
+  DHCP            : 0
+  NTP             : 0
+  other           : 0
+
+=== Per client (tunnel network 172.31.66.0/24) ===
+Client 172.31.66.102:
+  Remote 10.90.2.10: packets=252, bytes=38808, TCP=252, UDP=0, ICMP=0, connections=21
+    TCP local_port=32996 -> remote_port=80: packets=12, bytes=1848
+    TCP local_port=33000 -> remote_port=80: packets=12, bytes=1848
+    TCP local_port=45052 -> remote_port=80: packets=12, bytes=1848
+    ...
+```
+
+Twelve packets and 1848 bytes per connection, identically, is what one `curl`
+of the same page looks like: handshake, request, response, teardown.
 
 Everything is also written to three CSV files. At the application layer the
-summary makes it possible to read, for example, the first line of every HTTP
-request and response:
+summary makes it possible to read the first line of every HTTP request and
+response:
 
-![application_layer.csv with the first line of each HTTP exchange](docs/application-layer-csv.png)
+```
+timestamp,protocol,src_ip,dst_ip,info,length
+2026-08-16 00:18:35,HTTP,172.31.66.102,10.90.2.10,GET / HTTP/1.1,126
+2026-08-16 00:18:35,HTTP,10.90.2.10,172.31.66.102,HTTP/1.1 200 OK,290
+```
 
 And the transport layer records every TCP/UDP packet with its ports:
 
-![transport_layer.csv with TCP/UDP packets and ports](docs/transport-layer-csv.png)
+```
+timestamp,protocol,src_ip,src_port,dst_ip,dst_port,length
+2026-08-16 00:18:35,TCP,172.31.66.102,32996,10.90.2.10,80,60
+2026-08-16 00:18:35,TCP,10.90.2.10,80,172.31.66.102,32996,60
+2026-08-16 00:18:35,TCP,172.31.66.102,32996,10.90.2.10,80,126
+2026-08-16 00:18:35,TCP,10.90.2.10,80,172.31.66.102,32996,290
+```
+
+Note the source address: `172.31.66.102`, not the proxy's. The monitor sits on
+`tun0`, upstream of the NAT, which is the only reason per-client accounting is
+possible at all.
 
 Fields are quoted per RFC 4180, so a comma arriving inside an HTTP request line
 stays inside its column instead of shifting every column after it.
